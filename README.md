@@ -28,7 +28,7 @@ a confirmation pop-up on submit, and the filled Excel template delivered by emai
    A verified domain in Resend removes that restriction. As an alternative to Resend, an SMTP mailbox can be used by setting
    `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` (and `MAIL_FROM`) instead of `RESEND_API_KEY`.
 4. **Redeploy** (Deployments → ⋯ → Redeploy) so the variables take effect.
-5. **Switzerland exists from the first request**: `https://<project>.vercel.app/m/switzerland?k=swiss-preview-2026` (the key can be changed with the `SWITZERLAND_KEY` variable). Further markets: open `/admin?a=<ADMIN_KEY>`, create one per country (name + currency) and copy each market link.
+5. **The home page lists the countries** (Switzerland, UK, Croatia, Italy, Poland, Turkey, Japan), which exist from the first request. Selecting one opens its inventory. Optional: set `ACCESS_CODE` to ask for a shared code before the list appears. Per-country keys can be set with `SWITZERLAND_KEY`, `UK_KEY`, `CROATIA_KEY`, `ITALY_KEY`, `POLAND_KEY`, `TURKEY_KEY`, `JAPAN_KEY`. Further markets: `/admin?a=<ADMIN_KEY>`.
 
 ## Notes
 - Every submission is stored (answers snapshot) and downloadable from the admin page, even if email delivery is not set up or fails; the admin table shows the email status per submission.

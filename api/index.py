@@ -87,6 +87,8 @@ class Mem:
             return len(d[k])
         if op == "LRANGE":
             return list(d.get(k, []))
+        if op == "LLEN":
+            return len(d.get(k, []))
         raise ValueError("Unsupported command " + op)
 
 
@@ -388,12 +390,13 @@ def send_mail(name, filename, content, by, note, open_count):
 # Markets that exist from the first request (fixed link, no admin step needed).
 # The access key can be overridden with the SWITZERLAND_KEY environment variable.
 SEEDS = {
-    "switzerland": {
-        "slug": "switzerland",
-        "name": "Switzerland",
-        "currency": "CHF",
-        "key": os.environ.get("SWITZERLAND_KEY", "swiss-preview-2026"),
-    },
+    "switzerland": {"slug": "switzerland", "name": "Switzerland", "currency": "CHF", "key": os.environ.get("SWITZERLAND_KEY", "swiss-preview-2026")},
+    "uk": {"slug": "uk", "name": "UK", "currency": "GBP", "key": os.environ.get("UK_KEY", "uk-preview-2026")},
+    "croatia": {"slug": "croatia", "name": "Croatia", "currency": "EUR", "key": os.environ.get("CROATIA_KEY", "croatia-preview-2026")},
+    "italy": {"slug": "italy", "name": "Italy", "currency": "EUR", "key": os.environ.get("ITALY_KEY", "italy-preview-2026")},
+    "poland": {"slug": "poland", "name": "Poland", "currency": "PLN", "key": os.environ.get("POLAND_KEY", "poland-preview-2026")},
+    "turkey": {"slug": "turkey", "name": "Turkey", "currency": "TRY", "key": os.environ.get("TURKEY_KEY", "turkey-preview-2026")},
+    "japan": {"slug": "japan", "name": "Japan", "currency": "JPY", "key": os.environ.get("JAPAN_KEY", "japan-preview-2026")},
 }
 
 
@@ -597,6 +600,33 @@ class handler(BaseHTTPRequestHandler):
                 tp, owners, _, _ = load_all(meta["slug"])
                 fname = f"{meta['slug']}_draft.xlsx"
             return self._send(200, build_xlsx(meta["name"], meta["currency"], tp, owners), XLSX, {"Content-Disposition": f'attachment; filename="{fname}"'})
+
+        # ---------------- country list for the home page
+        if route == "countries" and method == "GET":
+            code = os.environ.get("ACCESS_CODE")
+            if code and not hmac.compare_digest(str(self.headers.get("X-Code") or q.get("code", "")), code):
+                return self._json({"error": "code_required", "code_required": True}, 401)
+            for sd in SEEDS:
+                get_meta(sd)
+            slugs = cmd("SMEMBERS", "vi:markets") or []
+            order = list(SEEDS) + sorted(x for x in slugs if x not in SEEDS)
+            cmds = []
+            for sl in order:
+                cmds += [["GET", K("m", sl)], ["HGETALL", K("tp", sl)], ["LLEN", K("subs", sl)]]
+            res = pipe(cmds)
+            out = []
+            for i, sl in enumerate(order):
+                raw = res[i * 3]
+                if not raw:
+                    continue
+                meta = json.loads(raw)
+                if sl in SEEDS:
+                    meta["key"] = SEEDS[sl]["key"]
+                tp = {k: json.loads(v) for k, v in todict(res[i * 3 + 1]).items()}
+                done = sum(1 for ref in ALL_REFS if ref in tp and not missing(tp[ref]["v"]))
+                out.append({"slug": sl, "name": meta["name"], "currency": meta["currency"], "key": meta["key"],
+                            "done": done, "total": len(ALL_REFS), "submitted": int(res[i * 3 + 2] or 0)})
+            return self._json({"countries": out, "storage": "redis" if REDIS_URL else "memory", "code_required": bool(code)})
 
         # ---------------- market
         meta = self._market(q)
