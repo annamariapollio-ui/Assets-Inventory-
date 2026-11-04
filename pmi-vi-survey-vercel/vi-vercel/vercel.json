@@ -1,0 +1,10 @@
+{
+  "outputDirectory": "public",
+  "rewrites": [
+    { "source": "/m/:slug", "destination": "/market.html" },
+    { "source": "/admin", "destination": "/admin.html" }
+  ],
+  "functions": {
+    "api/index.py": { "includeFiles": "template/**", "maxDuration": 30 }
+  }
+}
