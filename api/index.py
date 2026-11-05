@@ -6,6 +6,7 @@ Storage : Upstash Redis (Vercel Marketplace) via REST; in-memory fallback for lo
 Output  : the original Excel template, filled and e-mailed on submission.
 """
 import base64
+import hashlib
 import hmac
 import io
 import json
@@ -89,6 +90,16 @@ class Mem:
             return list(d.get(k, []))
         if op == "LLEN":
             return len(d.get(k, []))
+        if op == "SETNX":
+            if k in d:
+                return 0
+            d[k] = c[2]
+            return 1
+        if op == "EXPIRE":
+            return 1
+        if op == "DEL":
+            d.pop(k, None)
+            return 1
         raise ValueError("Unsupported command " + op)
 
 
@@ -127,6 +138,22 @@ def todict(flat):
 
 def K(kind, slug):
     return f"vi:{kind}:{slug}"
+
+
+_SECRET = None
+
+
+def get_secret():
+    """Server-side secret used to derive access tokens (random, stored once in Redis)."""
+    global _SECRET
+    if _SECRET:
+        return _SECRET
+    if not REDIS_URL:
+        _SECRET = "preview-mode"  # temporary storage only; nothing worth protecting
+        return _SECRET
+    cmd("SETNX", "vi:secret", secrets.token_hex(24))
+    _SECRET = cmd("GET", "vi:secret")
+    return _SECRET
 
 
 # ------------------------------------------------------------ template shape
@@ -387,34 +414,91 @@ def send_mail(name, filename, content, by, note, open_count):
 
 
 # ------------------------------------------------------------------ data ops
-# Markets that exist from the first request (fixed link, no admin step needed).
-# The access key can be overridden with the SWITZERLAND_KEY environment variable.
+# Markets that exist from the first request. Each has its own password:
+# environment variable <COUNTRY>_PASSWORD (e.g. SWITZERLAND_PASSWORD); without it a demo default applies.
 SEEDS = {
-    "switzerland": {"slug": "switzerland", "name": "Switzerland", "currency": "CHF", "key": os.environ.get("SWITZERLAND_KEY", "swiss-preview-2026")},
-    "uk": {"slug": "uk", "name": "UK", "currency": "GBP", "key": os.environ.get("UK_KEY", "uk-preview-2026")},
-    "croatia": {"slug": "croatia", "name": "Croatia", "currency": "EUR", "key": os.environ.get("CROATIA_KEY", "croatia-preview-2026")},
-    "italy": {"slug": "italy", "name": "Italy", "currency": "EUR", "key": os.environ.get("ITALY_KEY", "italy-preview-2026")},
-    "poland": {"slug": "poland", "name": "Poland", "currency": "PLN", "key": os.environ.get("POLAND_KEY", "poland-preview-2026")},
-    "turkey": {"slug": "turkey", "name": "Turkey", "currency": "TRY", "key": os.environ.get("TURKEY_KEY", "turkey-preview-2026")},
-    "japan": {"slug": "japan", "name": "Japan", "currency": "JPY", "key": os.environ.get("JAPAN_KEY", "japan-preview-2026")},
+    "switzerland": {"slug": "switzerland", "name": "Switzerland", "currency": "CHF"},
+    "uk": {"slug": "uk", "name": "UK", "currency": "GBP"},
+    "croatia": {"slug": "croatia", "name": "Croatia", "currency": "EUR"},
+    "italy": {"slug": "italy", "name": "Italy", "currency": "EUR"},
+    "poland": {"slug": "poland", "name": "Poland", "currency": "PLN"},
+    "turkey": {"slug": "turkey", "name": "Turkey", "currency": "TRY"},
+    "japan": {"slug": "japan", "name": "Japan", "currency": "JPY"},
 }
+
+
+PW_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no look-alike characters (0/O, 1/I/L)
+
+
+def norm_pw(p):
+    """Passwords are compared ignoring case, spaces and dashes (easier to type from an email)."""
+    return re.sub(r"[\s-]", "", str(p or "")).upper()
+
+
+def gen_password():
+    raw = "".join(secrets.choice(PW_ALPHABET) for _ in range(12))  # about 60 bits
+    return "-".join(raw[i:i + 4] for i in (0, 4, 8))
+
+
+def env_password(slug):
+    return os.environ.get(slug.upper().replace("-", "_") + "_PASSWORD", "").strip()
+
+
+def pw_key(slug):
+    return f"vi:pw:{slug}"
+
+
+def ensure_password(slug):
+    """First use of a ready-made country: store a strong generated password (needs the database)."""
+    cmd("SETNX", pw_key(slug), gen_password())
+    return cmd("GET", pw_key(slug)) or ""
+
+
+def all_slugs():
+    reg = cmd("SMEMBERS", "vi:markets") or []
+    return list(SEEDS) + sorted(x for x in reg if x not in SEEDS)
+
+
+def password_map():
+    slugs = all_slugs()
+    stored = pipe([["GET", pw_key(sl)] for sl in slugs])
+    out = {}
+    for sl, st in zip(slugs, stored):
+        pw = env_password(sl) or st or ""
+        if not pw and sl in SEEDS and REDIS_URL:
+            pw = ensure_password(sl)
+        if pw:
+            out[sl] = pw
+    return out
+
+
+def market_password(meta):
+    return meta.get("password", "")
+
+
+def finalize(meta):
+    """Attach the access token, derived from the server secret and the current password."""
+    pw = market_password(meta)
+    meta["key"] = hashlib.sha256(f"{get_secret()}:{meta['slug']}:{pw}".encode()).hexdigest()[:24] if pw else ""
+    return meta
 
 
 def get_meta(slug):
     if not re.fullmatch(r"[a-z0-9-]+", slug or ""):
         return None
-    raw = cmd("GET", K("m", slug))
-    seed = SEEDS.get(slug)
+    raw, stored = pipe([["GET", K("m", slug)], ["GET", pw_key(slug)]])
     if raw:
         meta = json.loads(raw)
-        if seed:
-            meta["key"] = seed["key"]
-        return meta
-    if seed:
-        meta = dict(seed, created=now_iso())
+    elif slug in SEEDS:
+        meta = dict(SEEDS[slug], created=now_iso())
         pipe([["SET", K("m", slug), json.dumps(meta)], ["SADD", "vi:markets", slug]])
-        return meta
-    return None
+    else:
+        return None
+    pw = env_password(slug) or stored or ""
+    if not pw and slug in SEEDS and REDIS_URL:
+        pw = ensure_password(slug)
+    meta["password"] = pw
+    return finalize(meta)
 
 
 def load_all(slug):
@@ -443,17 +527,26 @@ def presence_list(slug, by, ref):
     return int(res[0] or 0), out
 
 
-def create_market(name, currency):
+def create_market(name, currency, password=""):
     name = (name or "").strip()[:80]
+    password = (password or "").strip()
     if not name:
         raise ValueError("Market name needed")
+    if password:
+        if len(norm_pw(password)) < 10:
+            raise ValueError("A custom password needs at least 10 characters")
+        if any(norm_pw(v) == norm_pw(password) for v in password_map().values()):
+            raise ValueError("This password is already used by another country")
+    else:
+        password = gen_password()
     slug, n = slugify(name), 2
     while cmd("GET", K("m", slug)):
         slug = f"{slugify(name)}-{n}"
         n += 1
-    meta = {"slug": slug, "name": name, "currency": (currency or "EUR").strip().upper()[:8], "key": secrets.token_urlsafe(8), "created": now_iso()}
-    pipe([["SET", K("m", slug), json.dumps(meta)], ["SADD", "vi:markets", slug]])
-    return meta
+    meta = {"slug": slug, "name": name, "currency": (currency or "EUR").strip().upper()[:8], "created": now_iso()}
+    pipe([["SET", K("m", slug), json.dumps(meta)], ["SADD", "vi:markets", slug], ["SET", pw_key(slug), password[:80]]])
+    meta["password"] = password[:80]
+    return finalize(meta)
 
 
 def full_state(meta, since_ver=None):
@@ -514,7 +607,7 @@ class handler(BaseHTTPRequestHandler):
             self._json({"error": "Market not found"}, 404)
             return None
         key = self.headers.get("X-Key") or q.get("k", "")
-        if not hmac.compare_digest(str(key), meta["key"]):
+        if not meta.get("key") or not hmac.compare_digest(str(key), meta["key"]):
             self._json({"error": "Link not recognised"}, 403)
             return None
         return meta
@@ -551,13 +644,14 @@ class handler(BaseHTTPRequestHandler):
             if method == "POST":
                 b = self._body()
                 try:
-                    meta = create_market(b.get("name"), b.get("currency"))
+                    meta = create_market(b.get("name"), b.get("currency"), b.get("password"))
                 except ValueError as e:
                     return self._json({"error": str(e)}, 400)
                 return self._json({"ok": True, "slug": meta["slug"]})
             for sd in SEEDS:
                 get_meta(sd)
             slugs = cmd("SMEMBERS", "vi:markets") or []
+            pmap = password_map()
             cmds = []
             for sl in slugs:
                 cmds += [["GET", K("m", sl)], ["HGETALL", K("tp", sl)], ["HGETALL", K("own", sl)], ["LRANGE", K("subs", sl), 0, -1]]
@@ -568,6 +662,8 @@ class handler(BaseHTTPRequestHandler):
                 if not raw:
                     continue
                 meta = json.loads(raw)
+                meta["password"] = pmap.get(sl, "")
+                finalize(meta)
                 tp = {k: json.loads(v) for k, v in todict(res[i * 4 + 1]).items()}
                 owners = {k: json.loads(v) for k, v in todict(res[i * 4 + 2]).items()}
                 subs = [json.loads(x) for x in (res[i * 4 + 3] or [])]
@@ -576,13 +672,37 @@ class handler(BaseHTTPRequestHandler):
                 out.append(
                     {
                         "slug": sl, "name": meta["name"], "currency": meta["currency"],
-                        "link": f"{self._origin()}/m/{sl}?k={meta['key']}",
+                        "password": market_password(meta), "source": "environment" if env_password(sl) else "generated",
+                        "link": f"{self._origin()}/m/{sl}?k={meta['key']}" if meta["key"] else "",
                         "progress": p, "ready": is_ready(p),
                         "last_activity": max([t for t in times if t] or [meta.get("created", "")]),
                         "submissions": subs,
                     }
                 )
             return self._json({"markets": out, "mail_to": os.environ.get("MAIL_TO", ""), "require_complete": REQUIRE_COMPLETE})
+
+        if route == "admin_reset" and method == "POST":
+            if not self._admin(q):
+                return
+            b = self._body()
+            slug = s(b.get("slug"), 60)
+            if not get_meta(slug):
+                return self._json({"error": "Market not found"}, 404)
+            if env_password(slug):
+                return self._json({"error": f"This password is set in the project's environment variables ({slug.upper().replace('-', '_')}_PASSWORD) and is changed there."}, 400)
+            others = {norm_pw(v) for k, v in password_map().items() if k != slug}
+            pw = s(b.get("password"), 80)
+            if pw:
+                if len(norm_pw(pw)) < 10:
+                    return self._json({"error": "A custom password needs at least 10 characters"}, 400)
+                if norm_pw(pw) in others:
+                    return self._json({"error": "This password is already used by another country"}, 400)
+            else:
+                pw = gen_password()
+                while norm_pw(pw) in others:
+                    pw = gen_password()
+            cmd("SET", pw_key(slug), pw)
+            return self._json({"ok": True, "password": pw})
 
         if route in ("admin_export", "admin_file"):
             if not self._admin(q):
@@ -601,32 +721,25 @@ class handler(BaseHTTPRequestHandler):
                 fname = f"{meta['slug']}_draft.xlsx"
             return self._send(200, build_xlsx(meta["name"], meta["currency"], tp, owners), XLSX, {"Content-Disposition": f'attachment; filename="{fname}"'})
 
-        # ---------------- country list for the home page
-        if route == "countries" and method == "GET":
-            code = os.environ.get("ACCESS_CODE")
-            if code and not hmac.compare_digest(str(self.headers.get("X-Code") or q.get("code", "")), code):
-                return self._json({"error": "code_required", "code_required": True}, 401)
-            for sd in SEEDS:
-                get_meta(sd)
-            slugs = cmd("SMEMBERS", "vi:markets") or []
-            order = list(SEEDS) + sorted(x for x in slugs if x not in SEEDS)
-            cmds = []
-            for sl in order:
-                cmds += [["GET", K("m", sl)], ["HGETALL", K("tp", sl)], ["LLEN", K("subs", sl)]]
-            res = pipe(cmds)
-            out = []
-            for i, sl in enumerate(order):
-                raw = res[i * 3]
-                if not raw:
-                    continue
-                meta = json.loads(raw)
-                if sl in SEEDS:
-                    meta["key"] = SEEDS[sl]["key"]
-                tp = {k: json.loads(v) for k, v in todict(res[i * 3 + 1]).items()}
-                done = sum(1 for ref in ALL_REFS if ref in tp and not missing(tp[ref]["v"]))
-                out.append({"slug": sl, "name": meta["name"], "currency": meta["currency"], "key": meta["key"],
-                            "done": done, "total": len(ALL_REFS), "submitted": int(res[i * 3 + 2] or 0)})
-            return self._json({"countries": out, "storage": "redis" if REDIS_URL else "memory", "code_required": bool(code)})
+        # ---------------- password -> country + access token (the password alone decides the country)
+        if route == "unlock" and method == "POST":
+            b = self._body()
+            pw = norm_pw(b.get("password"))
+            want = s(b.get("slug"), 60)  # set when a direct country link asked for the password
+            ip = (self.headers.get("X-Forwarded-For") or "local").split(",")[0].strip()
+            fk = f"vi:fail:ip:{ip}"
+            if int(cmd("GET", fk) or 0) >= 10:
+                return self._json({"error": "Too many attempts. Please try again in a few minutes."}, 429)
+            match = None
+            for sl, p in password_map().items():  # no early exit: comparison time does not reveal a match
+                if pw and hmac.compare_digest(norm_pw(p).encode(), pw.encode()) and (not want or want == sl):
+                    match = sl
+            if match:
+                meta = get_meta(match)
+                cmd("DEL", fk)
+                return self._json({"ok": True, "slug": match, "key": meta["key"], "name": meta["name"]})
+            pipe([["INCR", fk], ["EXPIRE", fk, 600]])
+            return self._json({"error": "Password not recognised"}, 403)
 
         # ---------------- market
         meta = self._market(q)

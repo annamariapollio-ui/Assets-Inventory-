@@ -19,7 +19,8 @@
  <div class="info" id="info"></div>
  <form class="add" id="add"><div><label class="field-label" for="n">New market</label><input type="text" id="n" placeholder="e.g., Switzerland" required></div>
   <div style="min-width:110px"><label class="field-label" for="c">Currency</label><input type="text" id="c" placeholder="CHF" maxlength="6"></div>
-  <button class="btn" type="submit">Create market link</button></form>
+  <div><label class="field-label" for="pw">Country password</label><input type="text" id="pw" placeholder="Leave empty to generate a strong one"></div>
+  <button class="btn" type="submit">Create market</button></form>
  <div id="out"><div class="center">Loading…</div></div>
 </main>
 <script>
@@ -36,22 +37,27 @@ async function load(){
  const {markets,mail_to,require_complete}=await r.json();
  document.getElementById('info').innerHTML='Submissions are emailed to <strong>'+(mail_to?esc(mail_to):'(not set: add MAIL_TO in the project settings)')+'</strong>. Submission '+(require_complete?'requires all touchpoints to be answered.':'is possible at any time; open items stay empty in the workbook.');
  if(!markets.length){out.innerHTML='<div class="center">No markets yet. A first market can be created above.</div>';return;}
- out.innerHTML=`<table><thead><tr><th>Market</th><th>Progress</th><th>Last activity</th><th>Submissions</th><th>Actions</th></tr></thead><tbody>${
+ out.innerHTML=`<table><thead><tr><th>Market</th><th>Password</th><th>Progress</th><th>Last activity</th><th>Submissions</th><th>Actions</th></tr></thead><tbody>${
   markets.map(m=>`<tr><td><strong>${esc(m.name)}</strong><br><span class="tag">${esc(m.currency)}</span></td>
+   <td>${m.password?`<code style="user-select:all;font-size:14px">${esc(m.password)}</code><br><span class="tag">${m.source==='environment'?'set in Vercel settings':'generated'}</span><div class="row-actions" style="margin-top:6px"><button class="btn ghost small" data-pwcopy="${esc(m.password)}">Copy</button><button class="btn ghost small" data-reset="${esc(m.slug)}" data-name="${esc(m.name)}" ${m.source==='environment'?'disabled title="Changed in the Vercel environment variables"':''}>Reset</button></div>`:`<span class="tag" style="background:var(--amber-bg);color:var(--amber)">no password yet</span><br><span style="font-size:12px;color:var(--muted)">Connect the database, or set ${esc(m.slug.toUpperCase().replace(/-/g,'_'))}_PASSWORD</span>`}</td>
    <td>${m.progress.done} / ${m.progress.total} touchpoints (${Math.round(m.progress.done/m.progress.total*100)}%)<br><span class="tag ${m.ready?'ok':''}">${m.ready?'Complete':'In progress'}</span></td>
    <td>${m.last_activity?new Date(m.last_activity).toLocaleString():'—'}</td>
    <td class="files">${m.submissions.length?m.submissions.slice().reverse().map(s=>`<a href="#" data-n="${s.n}" data-s="${esc(m.slug)}">${new Date(s.at).toLocaleString()} · ${esc(s.by||'')}</a><span class="tag ${s.mail==='sent'?'ok':''}" style="margin-bottom:6px">email: ${esc(s.mail||'—')}</span>`).join('<br>'):'—'}</td>
-   <td><div class="row-actions"><button class="btn small" data-copy="${esc(m.link)}">Copy market link</button>
+   <td><div class="row-actions"><button class="btn small" data-copy="${esc(m.link)}">Copy admin link</button>
    <button class="btn ghost small" data-draft="${esc(m.slug)}">Current draft (Excel)</button></div></td></tr>`).join('')}</tbody></table>`;
 }
 document.addEventListener('click',async e=>{
- const t=e.target.closest('[data-copy],[data-draft],[data-n]');if(!t)return;e.preventDefault();
- if(t.dataset.copy){try{await navigator.clipboard.writeText(t.dataset.copy);t.textContent='Copied';setTimeout(()=>t.textContent='Copy market link',1500)}catch(x){prompt('Link',t.dataset.copy)}}
+ const t=e.target.closest('[data-copy],[data-draft],[data-n],[data-pwcopy],[data-reset]');if(!t||t.disabled)return;e.preventDefault();
+ if(t.dataset.pwcopy){try{await navigator.clipboard.writeText(t.dataset.pwcopy);t.textContent='Copied';setTimeout(()=>t.textContent='Copy',1500)}catch(x){prompt('Password',t.dataset.pwcopy)}return}
+ if(t.dataset.reset){if(!confirm('Reset the password for '+t.dataset.name+'? Everyone signed in to this country is signed out, and the new password has to be shared with its colleagues.'))return;
+  const r=await fetch('/api/index?route=admin_reset',{method:'POST',headers:{...H,'Content-Type':'application/json'},body:JSON.stringify({slug:t.dataset.reset})});
+  if(r.ok){load()}else{let m='Password could not be reset';try{m=(await r.json()).error||m}catch(x){}alert(m)}return}
+ if(t.dataset.copy){try{await navigator.clipboard.writeText(t.dataset.copy);t.textContent='Copied';setTimeout(()=>t.textContent='Copy admin link',1500)}catch(x){prompt('Link',t.dataset.copy)}}
  else if(t.dataset.draft)dl('/api/index?route=admin_export&slug='+t.dataset.draft,t.dataset.draft+'_draft.xlsx');
  else dl('/api/index?route=admin_file&slug='+t.dataset.s+'&n='+t.dataset.n,t.dataset.s+'_submission_'+t.dataset.n+'.xlsx');
 });
 document.getElementById('add').onsubmit=async e=>{e.preventDefault();
- const r=await fetch('/api/index?route=admin_markets',{method:'POST',headers:{...H,'Content-Type':'application/json'},body:JSON.stringify({name:n.value,currency:c.value})});
- if(r.ok){n.value='';c.value='';load();}else alert('Market could not be created');};
+ const r=await fetch('/api/index?route=admin_markets',{method:'POST',headers:{...H,'Content-Type':'application/json'},body:JSON.stringify({name:n.value,currency:c.value,password:pw.value})});
+ if(r.ok){n.value='';c.value='';pw.value='';load();}else{let m='Market could not be created';try{m=(await r.json()).error||m}catch(x){}alert(m)}};
 load();setInterval(load,20000);
 </script></body></html>

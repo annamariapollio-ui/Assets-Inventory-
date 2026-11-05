@@ -8,6 +8,13 @@ os.environ.setdefault("ADMIN_KEY", "dev")
 sys.path.insert(0, str(Path(__file__).parent / "api"))
 import index as api  # noqa: E402
 
+if os.environ.get("DEV_MOCK_REDIS"):  # emulate the database so passwords are generated as on Vercel
+    api.REDIS_URL = "mock"
+    api.pipe = lambda cmds: [api._MEM.run(c) for c in cmds]
+else:  # simple local test passwords
+    for _sl in api.SEEDS:
+        os.environ.setdefault(f"{_sl.upper()}_PASSWORD", f"TEST-{_sl.upper()}-ACCESS")
+
 PUB = Path(__file__).parent / "public"
 
 
@@ -33,7 +40,6 @@ class Dev(api.handler):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8100"))
-    m = api.get_meta("switzerland")
-    print(f"Demo market: http://localhost:{port}/m/{m['slug']}?k={m['key']}")
+    print(f"Home:        http://localhost:{port}/   (test passwords: TEST-<COUNTRY>-ACCESS, or see the admin page with DEV_MOCK_REDIS=1)")
     print(f"Admin:       http://localhost:{port}/admin?a={os.environ['ADMIN_KEY']}")
     ThreadingHTTPServer(("0.0.0.0", port), Dev).serve_forever()

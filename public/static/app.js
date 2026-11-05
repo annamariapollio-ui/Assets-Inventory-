@@ -226,7 +226,7 @@
           <input type="text" id="own-${w.ref}" data-owner="${w.ref}" data-k="value" placeholder="e.g., Internal Communications" value="${esc(owner(w.ref).value)}"></div>
         <div class="ws-actions">
           <button class="btn" data-go="#/${w.ref}" type="button">${done === tot ? 'Review workstream' : done ? 'Continue workstream' : 'Open workstream'}</button>
-          <button class="btn ghost" data-copylink="${w.ref}" type="button" title="Copies a direct link so a colleague can pick up this workstream">Copy link</button>
+          <button class="btn ghost" data-copylink="${w.ref}" type="button" title="Copies a direct link to this workstream; colleagues enter the country password to open it">Copy link</button>
         </div></article>`;
     }).join('');
 
@@ -486,8 +486,8 @@
     if (el.dataset.go) return go(el.dataset.go);
     if (el.id === 'open-submit') return askSubmit();
     if (el.dataset.copylink) {
-      const url = `${location.origin}/m/${slug}?k=${encodeURIComponent(KEY)}#/${el.dataset.copylink}`;
-      try { await navigator.clipboard.writeText(url); toast('Link copied'); } catch (err) { prompt('Link', url); }
+      const url = `${location.origin}/m/${slug}#/${el.dataset.copylink}`;
+      try { await navigator.clipboard.writeText(url); toast('Link copied. Colleagues are asked for the country password.'); } catch (err) { prompt('Link', url); }
       return;
     }
     if (el.dataset.seg) { S.cur[el.dataset.seg] = el.dataset.val; renderForm(); return queueSave(); }
@@ -534,6 +534,7 @@
     if (t.dataset.f === 'cost_unknown') { S.cur.cost_unknown = t.checked; queueSave(); }
   });
 
+  $('#signout').addEventListener('click', () => sessionStorage.removeItem('k:' + slug));
   $('#me').onclick = () => askName(true);
   $('#dl').onclick = async () => {
     await flush();
@@ -547,10 +548,40 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
 
   /* -------------------------------------------------------------- boot */
-  (async function init() {
+  function askCountryPassword(msg) {
+    $('#mname').textContent = slug.charAt(0).toUpperCase() + slug.slice(1);
+    view.innerHTML = `<div class="card" style="max-width:420px;margin:40px auto">
+      <h2 style="margin-top:0">Country password</h2>
+      <p class="hint">The password for this country was shared by the project team.</p>
+      <input type="password" id="cpw" placeholder="Country password" autocomplete="off">
+      <div class="hint" id="cmsg" style="color:#a33;margin:8px 0 0;min-height:18px">${esc(msg || '')}</div>
+      <div style="margin-top:10px;display:flex;gap:8px"><button class="btn" id="cgo" type="button">Open inventory</button>
+      <a class="btn ghost" href="/" style="text-decoration:none">Back to start</a></div></div>`;
+    const pw = $('#cpw'); pw.focus();
+    const go = async () => {
+      const btn = $('#cgo'); btn.disabled = true;
+      try {
+        const r = await fetch('/api/index?route=unlock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug, password: pw.value }) });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d.key) { KEY = d.key; sessionStorage.setItem('k:' + slug, KEY); return init(); }
+        $('#cmsg').textContent = r.status === 429 ? d.error : 'The password was not recognised. Another attempt is possible.';
+      } catch (e) { $('#cmsg').textContent = 'The connection was interrupted. Another attempt is possible.'; }
+      btn.disabled = false; pw.select();
+    };
+    $('#cgo').onclick = go;
+    pw.onkeydown = (e) => { if (e.key === 'Enter') go(); };
+  }
+
+  let booted = false;
+  async function init() {
+    if (!KEY) return askCountryPassword();
     const r = await api('state', null, { by: S.me });
+    if (r.status === 403 || r.status === 404) {
+      sessionStorage.removeItem('k:' + slug); KEY = '';
+      return askCountryPassword(r.status === 403 ? 'Access has expired or the password was changed. The current password is needed.' : '');
+    }
     if (!r.ok) {
-      view.innerHTML = `<div class="center"><h2>This link could not be opened</h2><p>The complete market link, including the access key, is needed. The project team can provide it.</p></div>`;
+      view.innerHTML = `<div class="center"><h2>This country could not be opened</h2><p>${esc((r.data && (r.data.detail || r.data.error)) || 'The server did not respond as expected.')}</p></div>`;
       $('#mname').textContent = 'Market inventory';
       return;
     }
@@ -558,6 +589,7 @@
     S.sver = r.data.ver;
     if (!S.me) askName(false);
     parseHash();
-    setInterval(poll, 15000);
-  })();
+    if (!booted) { booted = true; setInterval(poll, 15000); }
+  }
+  init();
 })();
