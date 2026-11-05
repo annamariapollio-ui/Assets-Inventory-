@@ -37,7 +37,7 @@ async function go() {
     const r = await fetch('/api/index?route=unlock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw.value }) });
     const d = await r.json().catch(() => ({}));
     if (r.ok && d.key && d.slug) { sessionStorage.setItem('k:' + d.slug, d.key); location.href = '/m/' + d.slug; return; }
-    msg.textContent = r.status === 429 ? d.error : 'The password was not recognised. Another attempt is possible.';
+    msg.textContent = r.status === 429 ? d.error : r.status >= 500 ? ('The server reported a problem: ' + (d.detail || d.error || r.status)) : 'The password was not recognised. Another attempt is possible.';
   } catch (e) { msg.textContent = 'The connection was interrupted. Another attempt is possible.'; }
   btn.disabled = false; pw.select();
 }

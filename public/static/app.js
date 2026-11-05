@@ -564,7 +564,7 @@
         const r = await fetch('/api/index?route=unlock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug, password: pw.value }) });
         const d = await r.json().catch(() => ({}));
         if (r.ok && d.key) { KEY = d.key; sessionStorage.setItem('k:' + slug, KEY); return init(); }
-        $('#cmsg').textContent = r.status === 429 ? d.error : 'The password was not recognised. Another attempt is possible.';
+        $('#cmsg').textContent = r.status === 429 ? d.error : r.status >= 500 ? ('The server reported a problem: ' + (d.detail || d.error || r.status)) : 'The password was not recognised. Another attempt is possible.';
       } catch (e) { $('#cmsg').textContent = 'The connection was interrupted. Another attempt is possible.'; }
       btn.disabled = false; pw.select();
     };
