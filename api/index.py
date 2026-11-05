@@ -15,6 +15,7 @@ import re
 import secrets
 import smtplib
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -410,8 +411,14 @@ def send_mail(name, filename, content, by, note, open_count):
                 sm.send_message(msg)
             return "sent"
         return "not configured"
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", "replace")
+        except Exception:
+            detail = ""
+        return f"failed ({e.code}): " + (detail or str(e))[:300]
     except Exception as e:
-        return "failed: " + str(e)[:120]
+        return "failed: " + str(e)[:200]
 
 
 # ------------------------------------------------------------------ data ops
@@ -705,6 +712,13 @@ class handler(BaseHTTPRequestHandler):
                     }
                 )
             return self._json({"markets": out, "mail_to": os.environ.get("MAIL_TO", ""), "require_complete": REQUIRE_COMPLETE})
+
+        if route == "admin_test_mail" and method == "POST":
+            if not self._admin(q):
+                return
+            blank = build_xlsx("Test (blank template)", "EUR", {}, {})
+            status = send_mail("Test", "email_test.xlsx", blank, "admin test", "This is a test of the email delivery.", 0)
+            return self._json({"mail": status, "to": os.environ.get("MAIL_TO", "")})
 
         if route == "admin_reset" and method == "POST":
             if not self._admin(q):

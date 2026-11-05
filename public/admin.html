@@ -17,6 +17,7 @@
 <header class="topbar"><div><div class="brand">VI Rollout Strategy · Market Inventory</div><h1>Admin overview</h1></div></header>
 <main>
  <div class="info" id="info"></div>
+ <div style="margin:-6px 0 18px"><button class="btn ghost small" id="testmail" type="button">Send test email</button> <span id="testres" style="font-size:13px;color:var(--muted);margin-left:8px"></span></div>
  <form class="add" id="add"><div><label class="field-label" for="n">New market</label><input type="text" id="n" placeholder="e.g., Switzerland" required></div>
   <div style="min-width:110px"><label class="field-label" for="c">Currency</label><input type="text" id="c" placeholder="CHF" maxlength="6"></div>
   <div><label class="field-label" for="pw">Country password</label><input type="text" id="pw" placeholder="Leave empty to generate a strong one"></div>
@@ -56,6 +57,11 @@ document.addEventListener('click',async e=>{
  else if(t.dataset.draft)dl('/api/index?route=admin_export&slug='+t.dataset.draft,t.dataset.draft+'_draft.xlsx');
  else dl('/api/index?route=admin_file&slug='+t.dataset.s+'&n='+t.dataset.n,t.dataset.s+'_submission_'+t.dataset.n+'.xlsx');
 });
+document.getElementById('testmail').onclick=async()=>{const b=document.getElementById('testmail'),o=document.getElementById('testres');b.disabled=true;o.textContent='Sending…';
+ try{const r=await fetch('/api/index?route=admin_test_mail',{method:'POST',headers:{...H,'Content-Type':'application/json'},body:'{}'});const d=await r.json();
+  o.style.color=d.mail==='sent'?'var(--green)':'#a33';
+  o.textContent=d.mail==='sent'?('Sent to '+d.to+'. Please check the inbox (and junk folder).'):d.mail==='not configured'?'Not configured: MAIL_TO and RESEND_API_KEY are needed in the Vercel settings.':('Not sent: '+d.mail);
+ }catch(e){o.style.color='#a33';o.textContent='The request failed.'}b.disabled=false};
 document.getElementById('add').onsubmit=async e=>{e.preventDefault();
  const r=await fetch('/api/index?route=admin_markets',{method:'POST',headers:{...H,'Content-Type':'application/json'},body:JSON.stringify({name:n.value,currency:c.value,password:pw.value})});
  if(r.ok){n.value='';c.value='';pw.value='';load();}else{let m='Market could not be created';try{m=(await r.json()).error||m}catch(x){}alert(m)}};

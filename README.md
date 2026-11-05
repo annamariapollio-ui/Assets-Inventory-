@@ -24,7 +24,7 @@ a confirmation pop-up on submit, and the filled Excel template delivered by emai
    | `MAIL_FROM` | optional, e.g. `VI Survey <survey@yourdomain.com>` (default: `onboarding@resend.dev`) |
    | `REQUIRE_COMPLETE` | optional; `true` = submit only when all touchpoints are answered (default `false`) |
 
-   Resend's test sender (`onboarding@resend.dev`) delivers only to the email address the Resend account was created with.
+   Resend's test sender (`onboarding@resend.dev`) delivers only to the email address the Resend account was created with, so the Resend account is best created with the same address as `MAIL_TO`. The admin page has a **Send test email** button that checks the delivery and shows Resend's message if it is refused.
    A verified domain in Resend removes that restriction. As an alternative to Resend, an SMTP mailbox can be used by setting
    `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` (and `MAIL_FROM`) instead of `RESEND_API_KEY`.
 4. **Redeploy** (Deployments → ⋯ → Redeploy) so the variables take effect.
